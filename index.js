@@ -1,57 +1,32 @@
-import http from "node:http";
+import express from "express";
 
-const TZ = "America/Los_Angeles";
+const app = express();
 
-function ptIso(now = new Date()) {
-  // Build PT wall-clock (server-side) without changing process TZ
-  const fmt = new Intl.DateTimeFormat("en-CA", {
-    timeZone: TZ,
-    hour12: false,
-    year: "numeric", month: "2-digit", day: "2-digit",
-    hour: "2-digit", minute: "2-digit", second: "2-digit"
-  });
-  const parts = Object.fromEntries(fmt.formatToParts(now).map(p => [p.type, p.value]));
-  const ptNaive = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
-
-  // Compute numeric offset like -07:00 / -08:00
-  const ptNow = new Date(now.toLocaleString("en-US", { timeZone: TZ }));
-  const offsetMin = Math.round((ptNow - now) / 60000); // negative in PT
-  const sign = offsetMin <= 0 ? "-" : "+";
-  const hh = String(Math.floor(Math.abs(offsetMin) / 60)).padStart(2, "0");
-  const mm = String(Math.abs(offsetMin) % 60).padStart(2, "0");
-  const offset = `${sign}${hh}:${mm}`;
-
-  return `${ptNaive}${offset}`;
-}
-
-const server = http.createServer((req, res) => {
-  if (req.url.startsWith("/health")) {
-    res.writeHead(200, { "content-type": "text/plain" });
-    res.end("ok");
-    return;
+// Middleware: auto-append ?t=<random>
+app.use((req, res, next) => {
+  if (!req.query.t) {
+    const nonce = Math.floor(Math.random() * 1e9).toString(36);
+    const url = new URL(req.originalUrl, `https://${req.hostname}`);
+    url.searchParams.set("t", nonce);
+    return res.redirect(302, url.toString());
   }
-
-  const now = new Date();
-  const body =
-`PT_ISO=${ptIso(now)}
-UTC_ISO=${now.toISOString()}
-ABBR=${new Intl.DateTimeFormat("en-US", { timeZone: TZ, timeZoneName: "short" })
-        .formatToParts(now).find(p => p.type === "timeZoneName")?.value || "PT"}
-EPOCH_MS=${now.getTime()}
-`;
-
-  res.writeHead(200, {
-    "content-type": "text/plain; charset=utf-8",
-    // kill all caches
-    "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
-    "pragma": "no-cache",
-    "expires": "0",
-    "surrogate-control": "no-store",
-    "cdn-cache-control": "no-store",
-    "vary": "*"
-  });
-  res.end(body);
+  next();
 });
 
-const port = process.env.PORT || 8080;
-server.listen(port, () => console.log(`listening on ${port}`));
+// Main endpoint: return current Pacific Time
+app.get("/", (req, res) => {
+  const now = new Date();
+  const ptTime = now.toLocaleString("en-US", {
+    timeZone: "America/Los_Angeles",
+    hour12: false
+  });
+
+  res.set("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  res.type("text/plain").send(ptTime);
+});
+
+// Start server
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+});
