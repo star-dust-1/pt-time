@@ -11,9 +11,10 @@ function ptISO(now = new Date()) {
     hour: "2-digit", minute: "2-digit", second: "2-digit",
   });
   const parts = Object.fromEntries(fmt.formatToParts(now).map(p => [p.type, p.value]));
-  const ptNaive = `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}`;
+  const ptNaive =
+    `${parts.year}-${parts.month}-${parts.day}` +
+    `T${parts.hour}:${parts.minute}:${parts.second}`;
 
-  // numeric offset like -07:00 / -08:00
   const ptNow = new Date(now.toLocaleString("en-US", { timeZone: TZ }));
   const offsetMin = Math.round((ptNow.getTime() - now.getTime()) / 60000);
   const sign = offsetMin <= 0 ? "-" : "+";
@@ -28,37 +29,46 @@ function abbrPT(now = new Date()) {
   return part?.value || "PT";
 }
 
+function noStoreHeaders(extra = {}) {
+  return {
+    "content-type": "text/plain; charset=utf-8",
+    "cache-control": "no-store, no-cache, must-revalidate, max-age=0, private, no-transform",
+    "pragma": "no-cache",
+    "expires": "0",
+    "surrogate-control": "no-store",
+    "cdn-cache-control": "no-store",
+    "vary": "*",
+    "date": new Date().toUTCString(),
+    ...extra,
+  };
+}
+
 const server = http.createServer((req, res) => {
   const now = new Date();
+  const u = new URL(req.url, "http://example"); // parse only
 
-  // parse once
-  const parsed = new URL(req.url, "http://example"); // dummy base just for parsing
-  const pathname = parsed.pathname;
-
-  // health check works even if someone adds ?foo=bar
-  if (pathname === "/health") {
+  // health
+  if (u.pathname === "/health") {
     res.writeHead(200, { "content-type": "text/plain" });
     res.end("ok");
     return;
   }
 
-  // force cache-busting nonce; use a RELATIVE redirect so host stays correct
-  if (!parsed.searchParams.get("t")) {
+  // if not on /pt/<nonce>, redirect to a unique path
+  const m = u.pathname.match(/^\/pt\/([a-z0-9]+)$/i);
+  if (!m) {
     const nonce = Math.random().toString(36).slice(2, 10);
-    parsed.searchParams.set("t", nonce);
-    const relative = `${parsed.pathname}?${parsed.searchParams.toString()}`;
-
+    const target = `/pt/${nonce}`;
     res.writeHead(302, {
-      "Location": relative,
-      "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
-      "pragma": "no-cache",
-      "expires": "0",
+      Location: target,
+      ...noStoreHeaders(),
+      "etag": `W/"redir-${nonce}-${Date.now()}"`,
     });
     res.end("redirecting");
     return;
   }
 
-  // fresh body
+  // serve fresh body at /pt/<nonce>
   const body =
 `PT_ISO=${ptISO(now)}
 UTC_ISO=${now.toISOString()}
@@ -67,18 +77,11 @@ EPOCH_MS=${now.getTime()}
 `;
 
   res.writeHead(200, {
-    "content-type": "text/plain; charset=utf-8",
-    "cache-control": "no-store, no-cache, must-revalidate, max-age=0",
-    "pragma": "no-cache",
-    "expires": "0",
-    "surrogate-control": "no-store",
-    "cdn-cache-control": "no-store",
-    "vary": "*",
+    ...noStoreHeaders(),
+    "etag": `W/"pt-${m[1]}-${Date.now()}"`,
   });
   res.end(body);
 });
 
 const port = Number(process.env.PORT || 8080);
-server.listen(port, "0.0.0.0", () => {
-  console.log(`listening on ${port}`);
-});
+server.listen(port, "0.0.0.0", () => console.log(`listening on ${port}`));
